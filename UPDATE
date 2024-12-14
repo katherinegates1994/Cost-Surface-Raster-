@@ -1,0 +1,82 @@
+import sys
+import os
+import arcpy
+from arcpy.sa import *
+from sys import argv
+
+# Dynamically retrieve the temporary directory
+temp_dir = os.path.join(os.environ['TEMP'], "ArcGISProTemp15212")
+if os.path.exists(temp_dir):
+    sys.path.append(temp_dir)
+else:
+    print(f"Warning: Temporary directory {temp_dir} does not exist.")
+
+# Function to create the cost surface raster
+def CostSurfaceRasterCreation(
+    CiticoDEM, 
+    Contour_interval=100, 
+    Distances=[24, 48, 96, 192, 384, 768], 
+    Reclassification="24 0;48 1;96 2;192 3;384 4;768 5;NODATA 5", 
+    Reclassify="scratch.gdb/Reclassify"
+):
+    """
+    Function to create a cost surface raster using the input DEM and settings.
+    """
+    try:
+        # Enable overwrite outputs if needed
+        arcpy.env.overwriteOutput = True
+
+        # Check out required licenses
+        arcpy.CheckOutExtension("3D")
+        arcpy.CheckOutExtension("Spatial")
+
+        # Set workspace and scratch workspace
+        workspace = os.path.join(os.getcwd(), "Data")
+        scratch_workspace = os.path.join(workspace, "scratch.gdb")
+
+        # Ensure workspace and scratch workspace exist
+        if not os.path.exists(workspace):
+            os.makedirs(workspace)
+        if not arcpy.Exists(scratch_workspace):
+            arcpy.management.CreateFileGDB(workspace, "scratch")
+
+        with arcpy.EnvManager(scratchWorkspace=scratch_workspace, workspace=workspace):
+            # Process: Contour
+            ContourOutput = os.path.join(scratch_workspace, "ContourOutput")
+            arcpy.sa.Contour(CiticoDEM, ContourOutput, Contour_interval, 0, 1, "CONTOUR", None)
+
+            # Process: Multiple Ring Buffer
+            BufferOutput = os.path.join(scratch_workspace, "BufferOutput")
+            arcpy.analysis.MultipleRingBuffer(
+                Input_Features=ContourOutput, 
+                Output_Feature_class=BufferOutput, 
+                Distances=Distances, 
+                Buffer_Unit="Default", 
+                Method="GEODESIC"
+            )
+
+            # Process: Feature to Raster
+            RasterBuffer = os.path.join(scratch_workspace, "RasterBuffer")
+            arcpy.conversion.FeatureToRaster(BufferOutput, "distance", RasterBuffer)
+            RasterBuffer = arcpy.Raster(RasterBuffer)
+
+            # Process: Reclassify
+            ReclassifiedRaster = os.path.join(scratch_workspace, "ReclassifiedRaster")
+            Reclassified = arcpy.sa.Reclassify(RasterBuffer, "VALUE", Reclassification, "DATA")
+            Reclassified.save(ReclassifiedRaster)
+
+            print(f"Reclassified raster saved at {ReclassifiedRaster}")
+
+    except Exception as e:
+        print(f"Error during processing: {e}")
+    finally:
+        # Check in extensions
+        arcpy.CheckInExtension("3D")
+        arcpy.CheckInExtension("Spatial")
+
+if __name__ == '__main__':
+    # Pass arguments from the command line if provided
+    if len(argv) > 1:
+        CostSurfaceRasterCreation(*argv[1:])
+    else:
+        print("No arguments provided. Please specify required inputs.")
